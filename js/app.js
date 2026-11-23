@@ -1,7 +1,7 @@
 // Bump ?v= (here and in index.html) on every release so browsers never mix old and new files.
-import { loadVideo, seekTo, seekSharpest, drawFrame, planTimestamps, canvasToBlob } from './extract.js?v=2';
-import { analyze, filterFrames, classify } from './analyze.js?v=2';
-import { upscaleImage, enhanceImage, resizeImage, initBackend, fallbackBackend, currentBackend, gpuName, isMobile, tileCount } from './upscale.js?v=2';
+import { loadVideo, seekTo, seekSharpest, mergeNeighbours, drawFrame, planTimestamps, canvasToBlob } from './extract.js?v=3';
+import { analyze, filterFrames, classify } from './analyze.js?v=3';
+import { upscaleImage, enhanceImage, resizeImage, initBackend, fallbackBackend, currentBackend, gpuName, isMobile, tileCount } from './upscale.js?v=3';
 
 const $ = id => document.getElementById(id);
 const MAX_OUTPUT_SIDE = 8192;      // browser canvas + memory safety
@@ -129,7 +129,7 @@ if (qs.get('video')) {
 }
 
 // ---------- settings ----------
-const settingIds = ['every', 'count', 'fps', 'start', 'end', 'maxFrames', 'quality', 'skipBlurry', 'dedupe', 'bestFrame', 'autoEnhance', 'sharpen', 'texture'];
+const settingIds = ['every', 'count', 'fps', 'start', 'end', 'maxFrames', 'quality', 'skipBlurry', 'dedupe', 'bestFrame', 'cleanup', 'autoEnhance', 'sharpen', 'texture'];
 settingIds.forEach(id => $(id).addEventListener('input', updateHints));
 document.querySelectorAll('input[name=mode], input[name=scale], input[name=model], input[name=format]')
   .forEach(r => r.addEventListener('change', updateHints));
@@ -147,7 +147,7 @@ function readSettings() {
     start, end, maxFrames: clamp(Math.round(+$('maxFrames').value || 60), 1, 1000),
     scale: +radio('scale'), model: radio('model'),
     format: radio('format'), quality: +$('quality').value / 100,
-    skipBlurry: $('skipBlurry').checked, dedupe: $('dedupe').value, bestFrame: $('bestFrame').checked,
+    skipBlurry: $('skipBlurry').checked, dedupe: $('dedupe').value, bestFrame: $('bestFrame').checked, cleanup: $('cleanup').checked,
     enhance: $('autoEnhance').checked, sharpen: +$('sharpen').value / 100, texture: +$('texture').value / 100,
   };
 }
@@ -291,6 +291,10 @@ async function run({ single } = {}) {
       let at = t;
       try { at = await seekSharpest(v, t, win); } catch { await seekTo(v, t + 0.01); at = t + 0.01; } // one retry slightly later
       const canvas = drawFrame(v);
+      if (s.cleanup) {
+        setStatus(`Reducing grain on frame ${i + 1} / ${plan.timestamps.length}`, ((i + 0.5) / plan.timestamps.length) * 0.2);
+        await mergeNeighbours(v, at, canvas, { signal: ac.signal });
+      }
       const f = {
         index: indexBase + i, time: at, width: canvas.width, height: canvas.height,
         analysis: analyze(canvas),
