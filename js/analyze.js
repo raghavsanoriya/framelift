@@ -33,7 +33,70 @@ export function analyze(canvas) {
     const a = hd[(y * 9 + x) * 4], b = hd[(y * 9 + x + 1) * 4];
     bits[y * 8 + x] = a > b ? 1 : 0;
   }
-  return { sharpness, hash: bits, mean };
+  return { sharpness, hash: bits, mean, tone: autoTone(toneStats(d)) };
+}
+
+// ---------- auto enhance (our version of an "analyze, then fix" enhancer) ----------
+// Statistics of a small RGBA thumbnail: luma percentiles, spread, colour cast, saturation.
+function toneStats(d) {
+  const hist = new Uint32Array(256);
+  let n = 0, sum = 0, sum2 = 0, satSum = 0, mr = 0, mg = 0, mb = 0, mn = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const r = d[i], g = d[i + 1], b = d[i + 2];
+    const l = 0.299 * r + 0.587 * g + 0.114 * b;
+    hist[l | 0]++; n++; sum += l; sum2 += l * l;
+    const mx = Math.max(r, g, b), mi = Math.min(r, g, b);
+    satSum += mx ? (mx - mi) / mx : 0;
+    if (l > 40 && l < 215) { mr += r; mg += g; mb += b; mn++; } // midtones only for white balance
+  }
+  const pct = q => { let acc = 0; const target = q * n; for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= target) return v / 255; } return 1; };
+  const mean = sum / n / 255;
+  return {
+    lo: pct(0.005), hi: pct(0.995), mean,
+    std: Math.sqrt(Math.max(0, sum2 / n - (sum / n) ** 2)) / 255,
+    sat: satSum / n,
+    cast: mn > n * 0.05 ? [mr / mn, mg / mn, mb / mn] : null,
+  };
+}
+
+const clampN = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// Gentle, bounded corrections (like a photo app's auto button), plus which ones are active.
+export function autoTone(st) {
+  const fixes = [];
+  // Levels: stretch the black and white points, but never clip much.
+  let black = clampN(st.lo - 0.01, 0, 0.1), white = clampN(st.hi + 0.01, 0.85, 1);
+  if (black < 0.015) black = 0;
+  if (white > 0.985) white = 1;
+  if (black > 0 || white < 1) fixes.push('levels');
+  const span = white - black;
+  // Exposure: pull the average toward a mid tone with a gamma curve, half strength.
+  const m = clampN((st.mean - black) / span, 0.02, 0.98);
+  let gamma = clampN(Math.log(0.46) / Math.log(m), 0.7, 1.4);
+  gamma = 1 + (gamma - 1) * 0.5;
+  if (Math.abs(gamma - 1) < 0.03) gamma = 1; else fixes.push('exposure');
+  // Contrast: flat images get a soft S-curve.
+  const stdN = st.std / span;
+  const contrast = stdN < 0.2 ? clampN((0.2 - stdN) * 2.5, 0, 0.35) : 0;
+  if (contrast > 0.03) fixes.push('contrast');
+  // Colour: lift dull colour a little; leave black-and-white footage alone.
+  let saturation = 1;
+  if (st.sat > 0.05 && st.sat < 0.3) { saturation = 1 + clampN((0.3 - st.sat) * 0.8, 0, 0.2); fixes.push('color'); }
+  // Warmth: weak grey-world white balance, capped at ±6% per channel.
+  let gains = [1, 1, 1];
+  if (st.cast) {
+    const avg = (st.cast[0] + st.cast[1] + st.cast[2]) / 3;
+    gains = st.cast.map(c => clampN(1 + (avg / c - 1) * 0.35, 0.94, 1.06));
+    if (Math.max(...gains.map(g => Math.abs(g - 1))) < 0.012) gains = [1, 1, 1]; else fixes.push('warmth');
+  }
+  return { black, white, gamma, contrast: contrast > 0.03 ? contrast : 0, saturation, gains, fixes };
+}
+
+// What the source needs, for the Enhance panel.
+export function classify(w, h, sharpness) {
+  if (Math.min(w, h) < 720) return 'low_res';
+  if (sharpness < 60) return 'soft';
+  return 'good';
 }
 
 export function hamming(a, b) { let d = 0; for (let i = 0; i < 64; i++) d += a[i] !== b[i]; return d; }

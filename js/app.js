@@ -1,6 +1,7 @@
-import { loadVideo, seekTo, seekSharpest, drawFrame, planTimestamps, canvasToBlob } from './extract.js';
-import { analyze, filterFrames } from './analyze.js';
-import { upscaleImage, resizeImage, initBackend, fallbackBackend, currentBackend } from './upscale.js';
+// Bump ?v= (here and in index.html) on every release so browsers never mix old and new files.
+import { loadVideo, seekTo, seekSharpest, drawFrame, planTimestamps, canvasToBlob } from './extract.js?v=2';
+import { analyze, filterFrames, classify } from './analyze.js?v=2';
+import { upscaleImage, enhanceImage, resizeImage, initBackend, fallbackBackend, currentBackend, gpuName, isMobile, tileCount } from './upscale.js?v=2';
 
 const $ = id => document.getElementById(id);
 const MAX_OUTPUT_SIDE = 8192;      // browser canvas + memory safety
@@ -76,9 +77,10 @@ function goStep(n, { scrollTo } = {}) {
     it.disabled = !canGo(k);
   });
   document.querySelectorAll('.side-item[data-info]').forEach(it => it.classList.toggle('active', n === 'info' && it.dataset.info === scrollTo));
+  if (n === 3) updateHints(); // analyses the frame on screen for the Enhance panel
   updateStats();
   closeMenu();
-  if (scrollTo) $('info-' + scrollTo)?.closest('.card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  if (scrollTo) $('info-' + scrollTo)?.closest('.card').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
   else window.scrollTo({ top: 0 });
 }
 
@@ -114,14 +116,20 @@ $('themeBtn').addEventListener('click', () => {
   try { localStorage.setItem('fl-theme', next); } catch { /* ignore */ }
 });
 
-// Testing / linking: ?video=<same-origin url>
+// Testing / linking: ?video=<same-origin url>. Other sites' URLs are ignored, so a crafted link
+// can't push someone else's media into the app.
 const qs = new URLSearchParams(location.search);
 if (qs.get('video')) {
-  fetch(qs.get('video')).then(r => r.blob()).then(b => openFile(new File([b], qs.get('video').split('/').pop(), { type: b.type })));
+  try {
+    const u = new URL(qs.get('video'), location.href);
+    if (u.origin === location.origin) {
+      fetch(u).then(r => r.blob()).then(b => openFile(new File([b], u.pathname.split('/').pop() || 'video', { type: b.type })));
+    }
+  } catch { /* not a URL */ }
 }
 
 // ---------- settings ----------
-const settingIds = ['every', 'count', 'fps', 'start', 'end', 'maxFrames', 'quality', 'skipBlurry', 'dedupe', 'bestFrame'];
+const settingIds = ['every', 'count', 'fps', 'start', 'end', 'maxFrames', 'quality', 'skipBlurry', 'dedupe', 'bestFrame', 'autoEnhance', 'sharpen', 'texture'];
 settingIds.forEach(id => $(id).addEventListener('input', updateHints));
 document.querySelectorAll('input[name=mode], input[name=scale], input[name=model], input[name=format]')
   .forEach(r => r.addEventListener('change', updateHints));
@@ -140,15 +148,53 @@ function readSettings() {
     scale: +radio('scale'), model: radio('model'),
     format: radio('format'), quality: +$('quality').value / 100,
     skipBlurry: $('skipBlurry').checked, dedupe: $('dedupe').value, bestFrame: $('bestFrame').checked,
+    enhance: $('autoEnhance').checked, sharpen: +$('sharpen').value / 100, texture: +$('texture').value / 100,
   };
 }
 
+// Phones (iOS Safari especially) refuse canvases above ~16.7 million pixels and run out of memory
+// well before desktop limits, so they get a pixel cap as well as the side cap.
+const MAX_OUTPUT_PIXELS = isMobile ? 16777216 : Infinity;
+function tooBig(v, k) {
+  return Math.max(v.videoWidth, v.videoHeight) * k > MAX_OUTPUT_SIDE || v.videoWidth * v.videoHeight * k * k > MAX_OUTPUT_PIXELS;
+}
 function effectiveScale(s) {
   const v = state.video;
   let scale = s.scale;
-  while (scale > 1 && Math.max(v.videoWidth, v.videoHeight) * scale > MAX_OUTPUT_SIDE) scale /= 2;
+  while (scale > 1 && tooBig(v, scale)) scale /= 2;
   return scale;
 }
+
+// ---------- Enhance panel: analyse the frame on screen, list what will be fixed ----------
+const TONE_LABEL = { levels: 'Levels', exposure: 'Exposure', contrast: 'Contrast', color: 'Colour', warmth: 'Warmth' };
+function previewAnalysis() {
+  const p = $('video');
+  if (!p || p.readyState < 2 || !p.videoWidth) return null;
+  const c = document.createElement('canvas'); c.width = 320; c.height = Math.max(16, Math.round(p.videoHeight / p.videoWidth * 320));
+  c.getContext('2d').drawImage(p, 0, 0, c.width, c.height);
+  return analyze(c);
+}
+function updateEnhancePanel(s, eff) {
+  const v = state.video;
+  $('sharpenVal').textContent = Math.round(s.sharpen * 100);
+  $('textureVal').textContent = Math.round(s.texture * 100);
+  if (state.step !== 3) return;
+  const a = previewAnalysis();
+  const kind = classify(v.videoWidth, v.videoHeight, a ? a.sharpness : 999);
+  const title = { low_res: 'Low resolution detected', soft: 'Soft footage detected', good: 'Sharp source: final polish' }[kind];
+  if ($('enhTitle').textContent !== title) $('enhTitle').textContent = title;
+  const fixes = [];
+  if (eff > 1) fixes.push('Clean up compression blocks and noise', 'Rebuild fine detail', `Boost resolution to ${v.videoWidth * eff}×${v.videoHeight * eff}`);
+  if (s.sharpen > 0) fixes.push('Sharpen edges');
+  if (s.texture > 0) fixes.push('Keep some original detail');
+  if (!fixes.length && !s.enhance) fixes.push('Nothing to change: frames are saved as they are');
+  setHtml($('enhFixes'), fixes.map(f => `<li><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>${f}</li>`).join(''));
+  const tone = s.enhance && a ? a.tone.fixes : [];
+  setHtml($('enhTone'), !s.enhance ? '<span class="muted small">Auto fix is off</span>'
+    : tone.length ? tone.map(t => `<span class="chip accent">${TONE_LABEL[t]}</span>`).join('')
+      : '<span class="chip">Tone looks good</span>');
+}
+function setHtml(el, html) { if (el.innerHTML !== html) el.innerHTML = html; }
 
 function updateHints() {
   if (!state.video) return;
@@ -163,11 +209,15 @@ function updateHints() {
   const v = state.video, eff = effectiveScale(s);
   const hint = $('sizeHint');
   hint.classList.toggle('warn', eff !== s.scale);
-  hint.textContent = s.scale === 1
-    ? `Images will be saved at the original ${v.videoWidth}×${v.videoHeight}.`
+  const cpuNote = eff > 1 && currentBackend() === 'wasm'
+    ? ` This browser has no WebGPU, so the AI runs on the processor: ${tileCount(v.videoWidth, v.videoHeight, s.model)} AI tiles per frame, which can take a few minutes per frame. The page stays usable while it works.`
+    : '';
+  const enhanced = s.enhance || s.sharpen > 0;
+  hint.textContent = (s.scale === 1
+    ? `Images keep the original ${v.videoWidth}×${v.videoHeight} size${enhanced ? ', with your Enhance settings applied' : ', untouched'}.`
     : eff !== s.scale
-      ? `${s.scale}× would exceed ${MAX_OUTPUT_SIDE}px, so ${eff === 1 ? 'upscaling is skipped' : eff + '× is used'}: ${v.videoWidth * eff}×${v.videoHeight * eff}.`
-      : `Each image: ${v.videoWidth}×${v.videoHeight} → ${v.videoWidth * eff}×${v.videoHeight * eff}.`;
+      ? `${s.scale}× would be too large for this device, so ${eff === 1 ? 'upscaling is skipped' : eff + '× is used'}: ${v.videoWidth * eff}×${v.videoHeight * eff}.`
+      : `Each image: ${v.videoWidth}×${v.videoHeight} → ${v.videoWidth * eff}×${v.videoHeight * eff}.`) + cpuNote;
   document.querySelectorAll('[data-size]').forEach(el => {
     const k = +el.dataset.size; el.textContent = `${v.videoWidth * k}×${v.videoHeight * k}`;
   });
@@ -176,6 +226,7 @@ function updateHints() {
     : { balanced: 'Real-ESRGAN General: cleans compression blocks and noise. Fast.', max: 'Real-ESRGAN x4plus: richest texture, about 10× slower, 67 MB download.' }[s.model]
       + (s.model === 'max' && currentBackend() === 'wasm' ? ' Without WebGPU this takes minutes per frame.' : '');
   $('formatNote').textContent = { png: 'PNG is lossless: best quality, larger files.', jpg: 'JPG is smaller; great for sharing.', webp: 'WebP is small and modern; not every app opens it.' }[s.format];
+  updateEnhancePanel(s, eff);
   updateStats();
 }
 
@@ -270,11 +321,20 @@ async function run({ single } = {}) {
       setStatus(`${scale > 1 ? 'Upscaling' : 'Encoding'} frame ${k + 1} / ${kept.length}${eta}`, base);
       const bmp = await createImageBitmap(f.source);
       const t1 = performance.now();
+      const tone = s.enhance ? f.analysis.tone : null;
       let out;
       if (scale > 1) {
         const opts = {
-          modelKey: s.model, scale, signal: ac.signal,
-          onProgress: p => { setCardProgress(f, p); setStatus(`Upscaling frame ${k + 1} / ${kept.length}: ${Math.round(p * 100)}%${eta}`, base + (p * 0.8) / kept.length); },
+          modelKey: s.model, scale, signal: ac.signal, tone, sharpen: s.sharpen, texture: s.texture,
+          onStage: (stage, p) => setStatus(stageText(stage, p), base),
+          onProgress: p => {
+            setCardProgress(f, p);
+            // Live estimate from this frame's own tiles until a whole frame has been timed.
+            const frameMs = (performance.now() - t1) / p;
+            const left = frameMs * (1 - p) + frameMs * (kept.length - k - 1);
+            const live = p < 1 ? `, about ${fmtTime(left / 1000)} left` : '';
+            setStatus(`Upscaling frame ${k + 1} / ${kept.length}: ${Math.round(p * 100)}%${perFrame ? eta : live}`, base + (p * 0.8) / kept.length);
+          },
         };
         try {
           out = await upscaleImage(bmp, opts);
@@ -284,6 +344,9 @@ async function run({ single } = {}) {
           showGpuInfo();
           out = await upscaleImage(bmp, opts);
         }
+        showGpuInfo(); // the engine reports what it really runs on after the first frame
+      } else if (tone || s.sharpen > 0) {
+        out = await enhanceImage(bmp, { tone, sharpen: s.sharpen, signal: ac.signal });
       } else {
         out = resizeImage(bmp, 1);
       }
@@ -311,13 +374,20 @@ async function run({ single } = {}) {
   }
 }
 
+function stageText(stage, p) {
+  const pct = p != null ? `: ${Math.round(p * 100)}%` : '';
+  if (stage === 'engine') return `Downloading the AI engine, first time only (about 29 MB)${pct}`;
+  if (stage === 'model') return `Downloading the AI model${pct}`;
+  return 'Starting the AI…';
+}
+
 function isGpuError(e) { return /shader|context|webgl|webgpu|gpu|program|link|fenceSync|device|backend|validation/i.test(String(e?.message || e)); }
 
 function friendlyError(e) {
   if (isGpuError(e)) return 'Your browser’s GPU backend failed (' + String(e.message).slice(0, 80) + '). Try updating your browser or graphics driver, or use Chrome/Edge.';
   const m = String(e.message || e);
-  if (/memory|OOM|allocate|context lost/i.test(m)) return 'The GPU ran out of memory. Try 2× instead of 4×, the Fast model, or a lower-resolution video.';
-  if (/load|fetch|network/i.test(m)) return 'Could not download the AI model. Check your internet connection (the model is fetched once from a public CDN).';
+  if (/memory|OOM|allocate|context lost/i.test(m)) return 'The device ran out of memory. Try 2× instead of 4×, the Standard model, or a lower-resolution video.';
+  if (/load|fetch|network/i.test(m)) return 'Could not download the AI engine or model. Check your internet connection and try again; it is downloaded once, then cached.';
   return 'Something went wrong: ' + m;
 }
 
@@ -336,7 +406,7 @@ function addCard(f) {
   f.thumbUrl = URL.createObjectURL(f.thumb);
   const el = document.createElement('div');
   el.className = 'frame'; el.id = 'f' + f.index;
-  el.innerHTML = `<img alt="Frame at ${fmtTime(f.time, true)}" src="${f.thumbUrl}"><div class="fbar"><div></div></div>
+  el.innerHTML = `<img alt="Frame at ${fmtTime(f.time, true)}" src="${f.thumbUrl}" width="400" height="${Math.round(f.height / f.width * 400)}" decoding="async"><div class="fbar"><div></div></div>
     <div class="info"><span>${fmtTime(f.time, true)}</span><span class="state">Queued</span>
     <button class="btn small dl" disabled>Save</button></div>`;
   el.querySelector('img').addEventListener('click', () => openCompare(f));
@@ -463,7 +533,10 @@ function setRunning(on) {
   ['grabNow', 'changeVideo', 'setStart', 'setEnd', 'newVideoBtn'].forEach(id => $(id).disabled = on);
   document.querySelectorAll('.side-item[data-nav]').forEach(it => { if (+it.dataset.nav !== 4) it.disabled = on || !canGo(+it.dataset.nav); });
 }
-function setStatus(text, p) { $('status').textContent = text; if (p != null) $('bar').style.transform = `scaleX(${clamp(p, 0, 1)})`; }
+function setStatus(text, p) {
+  $('status').textContent = text;
+  if (p != null) { $('bar').style.transform = `scaleX(${clamp(p, 0, 1)})`; $('progress').setAttribute('aria-valuenow', Math.round(clamp(p, 0, 1) * 100)); }
+}
 function showError(msg) { const e = $('error'); e.hidden = !msg; e.textContent = msg || ''; }
 function abortErr() { return new DOMException('Cancelled', 'AbortError'); }
 function clamp(x, a, b) { return Math.min(b, Math.max(a, x)); }
@@ -475,7 +548,10 @@ function fmtTime(sec, precise) {
 // Show which GPU the browser picked (helps users with dual-GPU laptops).
 function showGpuInfo() {
   initBackend().then(({ backend, gpu }) => {
-    const cpu = backend === 'cpu';
+    // After the first run, trust what the engine worker actually started on.
+    const cpu = backend === 'cpu' || currentBackend() === 'wasm';
+    if (cpu) backend = 'cpu';
+    gpu = gpuName() || gpu;
     $('gpuInfo').textContent = cpu
       ? 'WebGPU is not available in this browser, so the AI runs on the CPU and is slow. Use a current Chrome or Edge with hardware acceleration on.'
       : `This browser is using: ${gpu || 'unknown GPU'} (${backend}).`;

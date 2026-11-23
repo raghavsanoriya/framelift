@@ -6,16 +6,18 @@ export function loadVideo(file) {
     const v = document.createElement('video');
     v.muted = true; v.playsInline = true; v.preload = 'auto';
     v.src = URL.createObjectURL(file);
-    const fail = () => reject(new Error(
+    const fail = () => { URL.revokeObjectURL(v.src); reject(new Error(
       'Your browser cannot decode this video (often HEVC/H.265 or ProRes). ' +
-      'Try Chrome or Edge, or convert it to H.264 MP4 or WebM first.'));
+      'Try Chrome or Edge, or convert it to H.264 MP4 or WebM first.')); };
     v.onerror = fail;
     v.onloadeddata = async () => {
       if (!v.videoWidth || !v.videoHeight) return fail();
       // Some WebM files report Infinity duration until we seek to the end.
       if (!isFinite(v.duration)) {
         v.currentTime = 1e7;
-        await new Promise(r => v.addEventListener('seeked', r, { once: true }));
+        await new Promise(r => { v.addEventListener('seeked', r, { once: true }); setTimeout(r, 5000); });
+        if (!isFinite(v.duration)) return fail();
+        v.currentTime = 0;
       }
       resolve(v);
     };
@@ -77,7 +79,8 @@ export async function seekSharpest(video, t, win, n = 5) {
 export function drawFrame(video) {
   const c = document.createElement('canvas');
   c.width = video.videoWidth; c.height = video.videoHeight;
-  c.getContext('2d').drawImage(video, 0, 0);
+  // read back three times (analysis, PNG, thumbnail), so keep it in CPU memory
+  c.getContext('2d', { willReadFrequently: true }).drawImage(video, 0, 0);
   return c;
 }
 
