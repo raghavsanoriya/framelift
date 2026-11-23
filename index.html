@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FrameLift: video to HD images</title>
+<meta name="description" content="Free, no-login video to HD image converter. Extract frames from MP4, MOV or WebM and upscale them with AI, entirely in your browser.">
+<link rel="stylesheet" href="styles.css">
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script type="module" src="js/app.js"></script>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-upload" viewBox="0 0 24 24"><path d="M12 15V3M7 8l5-5 5 5M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></symbol>
+    <symbol id="i-frames" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 4v16M17 4v16M3 9h4M3 15h4M17 9h4M17 15h4"/></symbol>
+    <symbol id="i-sparkle" viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+    <symbol id="i-download" viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3l8 3v6c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V6z"/><path d="M9 12l2 2 4-4"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L4 14h7l-1 7 9-11h-7z"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/></symbol>
+    <symbol id="i-moon" viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></symbol>
+    <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M10 12l5 3-5 3z"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></symbol>
+    <symbol id="i-res" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M8 19v2M16 19v2"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="M12 3l9 5-9 5-9-5z"/><path d="M3 13l9 5 9-5"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+  </defs>
+</svg>
+
+<div class="app">
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <a class="brand" href="./"><span class="logo" aria-hidden="true"></span>FrameLift</a>
+    <nav class="side-nav" aria-label="Steps">
+      <div class="side-label">Convert</div>
+      <button class="side-item" data-nav="1"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg><span>Upload video</span><svg class="ic tick" aria-hidden="true"><use href="#i-check"/></svg></button>
+      <button class="side-item" data-nav="2"><svg class="ic" aria-hidden="true"><use href="#i-frames"/></svg><span>Choose frames</span><svg class="ic tick" aria-hidden="true"><use href="#i-check"/></svg></button>
+      <button class="side-item" data-nav="3"><svg class="ic" aria-hidden="true"><use href="#i-sparkle"/></svg><span>HD quality</span><svg class="ic tick" aria-hidden="true"><use href="#i-check"/></svg></button>
+      <button class="side-item" data-nav="4"><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg><span>Download</span><svg class="ic tick" aria-hidden="true"><use href="#i-check"/></svg></button>
+
+      <div class="side-label">Help</div>
+      <button class="side-item" data-info="privacy"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg><span>Privacy</span></button>
+      <button class="side-item" data-info="ai"><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg><span>About AI upscaling</span></button>
+      <button class="side-item" data-info="speed"><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg><span>Speed tips</span></button>
+    </nav>
+    <div class="side-card">
+      <div class="side-card-head"><svg class="ic" aria-hidden="true"><use href="#i-chip"/></svg><span>Processing on</span></div>
+      <div class="side-card-gpu" id="gpuName">Detecting GPU…</div>
+      <div class="side-card-sub" id="gpuBackend">Runs on this device only</div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim" hidden></div>
+
+  <div class="main">
+    <!-- TOPBAR -->
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="menuBtn" aria-label="Open menu"><svg class="ic" aria-hidden="true"><use href="#i-menu"/></svg></button>
+      <div class="file-chip" id="fileChip"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg><span id="fileChipText">No video selected</span></div>
+      <div class="top-actions">
+        <span class="badge-free">Free, no login</span>
+        <button class="icon-btn" id="themeBtn" aria-label="Toggle dark mode"><svg class="ic" aria-hidden="true"><use href="#i-moon"/></svg></button>
+        <button class="btn sm" id="newVideoBtn"><svg class="ic" aria-hidden="true"><use href="#i-plus"/></svg>New video</button>
+      </div>
+    </header>
+
+    <main class="content">
+      <!-- PAGE HEADER -->
+      <div class="page-head">
+        <div>
+          <h1 id="pageTitle">Upload video</h1>
+          <div class="crumb" id="pageCrumb">Convert / Step 1 of 4</div>
+        </div>
+        <div class="page-actions">
+          <button class="btn" id="backBtn" hidden>Back</button>
+          <button class="btn dark" data-go="3" data-show="2">Continue</button>
+          <button class="btn dark" id="run" data-show="3"><svg class="ic" aria-hidden="true"><use href="#i-sparkle"/></svg>Convert to HD</button>
+          <button class="btn" id="cancel" hidden>Cancel</button>
+          <button class="btn dark" id="zipBtn" data-show="4" disabled><svg class="ic" aria-hidden="true"><use href="#i-download"/></svg>Download ZIP</button>
+        </div>
+      </div>
+
+      <div id="error" class="alert" role="alert" hidden></div>
+
+      <!-- STAT CARDS -->
+      <div class="stats" id="stats" hidden>
+        <div class="stat"><div class="stat-label"><svg class="ic" aria-hidden="true"><use href="#i-res"/></svg><span id="s1l">Source</span></div><div class="stat-body"><div class="stat-value" id="s1v"></div><div class="stat-sub" id="s1s"></div></div></div>
+        <div class="stat"><div class="stat-label"><svg class="ic" aria-hidden="true"><use href="#i-clock"/></svg><span id="s2l">Duration</span></div><div class="stat-body"><div class="stat-value" id="s2v"></div><div class="stat-sub" id="s2s"></div></div></div>
+        <div class="stat"><div class="stat-label"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span id="s3l">Frames</span></div><div class="stat-body"><div class="stat-value" id="s3v"></div><div class="stat-sub" id="s3s"></div></div></div>
+        <div class="stat"><div class="stat-label"><svg class="ic" aria-hidden="true"><use href="#i-expand"/></svg><span id="s4l">Output</span></div><div class="stat-body"><div class="stat-value" id="s4v"></div><div class="stat-sub" id="s4s"></div></div></div>
+      </div>
+
+      <!-- STEP 1 -->
+      <section class="step" data-step="1">
+        <div class="card">
+          <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-upload"/></svg>Video to HD images</div>
+          <div class="card-body">
+            <div id="drop" class="drop" tabindex="0" role="button" aria-label="Choose a video">
+              <input id="file" type="file" accept="video/*" hidden>
+              <div class="drop-icon" aria-hidden="true"><svg class="ic lg" aria-hidden="true"><use href="#i-upload"/></svg></div>
+              <div class="drop-title">Drop your video here</div>
+              <div class="muted">or <span class="link">browse files</span>. MP4, MOV or WebM.</div>
+            </div>
+          </div>
+        </div>
+        <div class="grid3">
+          <div class="card"><div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-frames"/></svg>Full resolution</div><div class="card-body"><p class="muted">Frames are read straight from the video file at its native size, not screenshotted.</p></div></div>
+          <div class="card"><div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-sparkle"/></svg>AI upscaling</div><div class="card-body"><p class="muted">Each frame is sharpened and enlarged 2× or 4× by an AI model running in your browser.</p></div></div>
+          <div class="card"><div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>Private</div><div class="card-body"><p class="muted">Nothing is uploaded. Blurry and duplicate frames are skipped automatically.</p></div></div>
+        </div>
+      </section>
+
+      <!-- STEP 2 -->
+      <section class="step" data-step="2" hidden>
+        <div class="grid2-main">
+          <div class="card">
+            <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>Preview<span class="card-aside" id="meta"></span></div>
+            <div class="card-body">
+              <video id="video" controls muted playsinline></video>
+              <div class="row wrap mt">
+                <button id="setStart" class="btn sm">Start here</button>
+                <button id="setEnd" class="btn sm">End here</button>
+                <button id="grabNow" class="btn sm">Capture this frame</button>
+                <button id="changeVideo" class="btn sm ghost">Change video</button>
+              </div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-frames"/></svg>Frame selection</div>
+            <div class="card-body">
+              <fieldset class="field">
+                <legend>Grab a frame</legend>
+                <div class="seg" role="radiogroup">
+                  <label><input type="radio" name="mode" value="interval" checked><span>Every few sec</span></label>
+                  <label><input type="radio" name="mode" value="count"><span>Set number</span></label>
+                  <label><input type="radio" name="mode" value="all"><span>Every frame</span></label>
+                </div>
+              </fieldset>
+              <div class="grid2">
+                <label class="field" data-mode="interval">Every (seconds)<input id="every" type="number" min="0.04" step="0.1" value="1"></label>
+                <label class="field" data-mode="count">How many frames<input id="count" type="number" min="1" max="500" value="20"></label>
+                <label class="field" data-mode="all">Video frame rate (fps)<input id="fps" type="number" min="1" max="120" value="30"></label>
+                <label class="field">Max frames<input id="maxFrames" type="number" min="1" max="1000" value="60"></label>
+                <label class="field">From (s)<input id="start" type="number" min="0" step="0.01" value="0"></label>
+                <label class="field">To (s)<input id="end" type="number" min="0" step="0.01" value="0"></label>
+              </div>
+              <div class="toggles">
+                <label class="switch" title="Checks a few frames around each moment and keeps the sharpest"><input id="bestFrame" type="checkbox" checked><span class="track"></span>Pick sharpest nearby frame</label>
+                <label class="switch"><input id="skipBlurry" type="checkbox" checked><span class="track"></span>Skip blurry</label>
+                <label class="field inline">Duplicates
+                  <select id="dedupe"><option value="off">Keep all</option><option value="light">Light</option><option value="medium" selected>Medium</option><option value="strong">Strong</option></select>
+                </label>
+              </div>
+              <p class="summary" id="planHint"></p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 3 -->
+      <section class="step" data-step="3" hidden>
+        <div class="card">
+          <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-expand"/></svg>Resolution</div>
+          <div class="card-body">
+            <div class="cards" role="radiogroup">
+              <label class="card-opt"><input type="radio" name="scale" value="1"><span class="co-title">Original</span><span class="co-big" data-size="1"></span><span class="co-note">No AI, fastest</span></label>
+              <label class="card-opt"><input type="radio" name="scale" value="2" checked><span class="co-badge">Recommended</span><span class="co-title">HD 2×</span><span class="co-big" data-size="2"></span><span class="co-note">AI upscaled</span></label>
+              <label class="card-opt"><input type="radio" name="scale" value="4"><span class="co-title">Ultra 4×</span><span class="co-big" data-size="4"></span><span class="co-note">AI upscaled, slow</span></label>
+            </div>
+            <p class="summary" id="sizeHint"></p>
+          </div>
+        </div>
+        <div class="grid2-even">
+          <div class="card" id="modelWrap">
+            <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-sparkle"/></svg>AI model</div>
+            <div class="card-body">
+              <div class="seg" role="radiogroup">
+                <label><input type="radio" name="model" value="balanced" checked><span>Standard</span></label>
+                <label><input type="radio" name="model" value="max"><span>Best detail</span></label>
+              </div>
+              <p class="muted small mt" id="modelNote">Real-ESRGAN General: cleans compression blocks and noise. Fast.</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg>File type</div>
+            <div class="card-body">
+              <div class="seg" role="radiogroup">
+                <label><input type="radio" name="format" value="png" checked><span>PNG</span></label>
+                <label><input type="radio" name="format" value="jpg"><span>JPG</span></label>
+                <label><input type="radio" name="format" value="webp"><span>WebP</span></label>
+              </div>
+              <label class="field mt" id="qualityWrap" hidden>Quality: <span id="qualityVal">95</span><input id="quality" type="range" min="60" max="100" value="95"></label>
+              <p class="muted small mt" id="formatNote">PNG is lossless: best quality, larger files.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- STEP 4 -->
+      <section class="step" data-step="4" hidden>
+        <div class="card">
+          <div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-layers"/></svg><span id="resultsTitle">Your HD images</span>
+            <label class="switch card-aside"><input id="showSkipped" type="checkbox"><span class="track"></span>Show skipped</label>
+          </div>
+          <div class="card-body">
+            <div class="row between wrap">
+              <p class="muted small" id="status" aria-live="polite"></p>
+              <span class="muted small">Click an image to compare before / after</span>
+            </div>
+            <div id="progress" class="progress"><div id="bar"></div></div>
+            <div id="results"><div id="gallery" class="gallery"></div>
+              <div id="emptyState" class="empty" hidden><strong id="emptyTitle">No images yet</strong><span id="emptyText">Choose your frames and quality, then convert.</span><br><button class="btn" id="emptyAction" data-go="2">Choose frames</button></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- INFO (help) -->
+      <section class="step" data-step="info" hidden>
+        <div class="card"><div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-shield"/></svg>Privacy</div><div class="card-body" id="info-privacy"><p>Your video never leaves this device. Decoding, frame extraction and the AI model all run inside this browser tab. Only the app files and the AI model weights are downloaded from a public CDN; nothing is sent back.</p></div></div>
+        <div class="card"><div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-info"/></svg>About AI upscaling</div><div class="card-body" id="info-ai"><p>The AI model adds believable detail when it enlarges an image. It can’t recover detail the camera never captured, so check faces, small text and logos closely.</p></div></div>
+        <div class="card"><div class="card-label"><svg class="ic" aria-hidden="true"><use href="#i-bolt"/></svg>Speed tips</div><div class="card-body" id="info-speed"><p>Keep this tab open and visible while converting, because browsers slow down background tabs. On laptops with two graphics cards, set your browser to “High performance” in Windows Settings → System → Display → Graphics. HD 2× with the Standard model is the fastest good option; 4× and Best detail take much longer. The first run downloads the AI engine (about 30 MB) once.</p><p class="muted small mt" id="gpuInfo"></p></div></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<dialog id="compare" class="compare">
+  <div class="compare-head">
+    <div id="compareTitle" class="small"></div>
+    <div class="row">
+      <a id="compareDl" class="btn sm dark" download>Download</a>
+      <button id="compareClose" class="btn sm" aria-label="Close">Close</button>
+    </div>
+  </div>
+  <div id="compareStage" class="compare-stage">
+    <!-- the two images are created by js/app.js when a frame is opened -->
+    <div id="cmpBeforeWrap" class="cmp-before"></div>
+    <span class="cmp-label l">Original</span><span class="cmp-label r">HD</span>
+  </div>
+  <label class="cmp-range">Original<input id="cmpSlider" type="range" min="0" max="100" value="50" aria-label="Drag to compare original and HD">HD</label>
+</dialog>
+</body>
+</html>
