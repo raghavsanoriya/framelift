@@ -10,9 +10,9 @@
 <meta name="theme-color" content="#0d0d10" media="(prefers-color-scheme: dark)">
 <title>FrameLift: video to HD images</title>
 <meta name="description" content="Free, no-login video to HD image converter. Extract frames from MP4, MOV or WebM and upscale them with AI, entirely in your browser.">
-<link rel="stylesheet" href="styles.css?v=2">
+<link rel="stylesheet" href="styles.css?v=4">
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" integrity="sha256-rMfkFFWoB2W1/Zx+4bgHim0WC7vKRVrq6FTeZclH1Z4=" crossorigin="anonymous"></script>
-<script type="module" src="js/app.js?v=2"></script>
+<script type="module" src="js/app.js?v=4"></script>
 </head>
 <body>
 <svg width="0" height="0" class="sprite" aria-hidden="true">
@@ -59,7 +59,7 @@
       <div class="side-card-head"><svg class="ic" aria-hidden="true"><use href="#i-chip"/></svg><span>Processing on</span></div>
       <div class="side-card-gpu" id="gpuName">Detecting GPU…</div>
       <div class="side-card-sub" id="gpuBackend">Runs on this device only</div>
-      <div class="side-card-sub">Version 2</div>
+      <div class="side-card-sub" id="appVersion">Version 4</div>
     </div>
   </aside>
   <div class="scrim" id="scrim" hidden></div>
@@ -67,7 +67,7 @@
   <div class="main">
     <!-- TOPBAR -->
     <header class="topbar">
-      <button class="icon-btn only-mobile" id="menuBtn" aria-label="Open menu"><svg class="ic" aria-hidden="true"><use href="#i-menu"/></svg></button>
+      <button class="icon-btn only-mobile" id="menuBtn" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false"><svg class="ic" aria-hidden="true"><use href="#i-menu"/></svg></button>
       <div class="file-chip" id="fileChip"><svg class="ic" aria-hidden="true"><use href="#i-file"/></svg><span id="fileChipText">No video selected</span></div>
       <div class="top-actions">
         <span class="badge-free">Free, no login</span>
@@ -158,12 +158,13 @@
               </div>
               <div class="toggles">
                 <label class="switch" title="Checks a few frames around each moment and keeps the sharpest"><input id="bestFrame" type="checkbox" checked><span class="track"></span>Pick sharpest nearby frame</label>
+                <label class="switch" title="Merges each frame with its neighbours to remove grain from low-light footage. Moving areas are left as they are. Adds about a second per frame."><input id="cleanup" type="checkbox"><span class="track"></span>Reduce grain (low-light video)</label>
                 <label class="switch"><input id="skipBlurry" type="checkbox" checked><span class="track"></span>Skip blurry</label>
                 <label class="field inline">Duplicates
                   <select id="dedupe"><option value="off">Keep all</option><option value="light">Light</option><option value="medium" selected>Medium</option><option value="strong">Strong</option></select>
                 </label>
               </div>
-              <p class="summary" id="planHint"></p>
+              <p class="summary" id="planHint" aria-live="polite"></p>
             </div>
           </div>
         </div>
@@ -193,8 +194,8 @@
               <div class="chips" id="enhTone"></div>
             </div>
             <div>
-              <label class="field">Sharpen: <span id="sharpenVal">25</span><input id="sharpen" type="range" min="0" max="100" value="25"></label>
-              <label class="field">Keep original detail: <span id="textureVal">0</span><input id="texture" type="range" min="0" max="60" value="0"></label>
+              <label class="field"><span class="range-head"><span>Sharpen</span><span id="sharpenVal" class="range-val">25</span></span><input id="sharpen" type="range" min="0" max="100" value="25"></label>
+              <label class="field"><span class="range-head"><span>Keep original detail</span><span id="textureVal" class="range-val">0</span></span><input id="texture" type="range" min="0" max="60" value="0"></label>
               <p class="muted small">Auto fix adjusts levels, exposure, contrast, colour and white balance for each frame separately, so check it on your clip first. Set Sharpen to 0 for untouched frames. Keep original detail blends some of the source back in, so skin and fabric look less smooth.</p>
             </div>
           </div>

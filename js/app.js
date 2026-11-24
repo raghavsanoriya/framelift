@@ -1,7 +1,7 @@
 // Bump ?v= (here and in index.html) on every release so browsers never mix old and new files.
-import { loadVideo, seekTo, seekSharpest, drawFrame, planTimestamps, canvasToBlob } from './extract.js?v=2';
-import { analyze, filterFrames, classify } from './analyze.js?v=2';
-import { upscaleImage, enhanceImage, resizeImage, initBackend, fallbackBackend, currentBackend, gpuName, isMobile, tileCount } from './upscale.js?v=2';
+import { loadVideo, seekTo, seekSharpest, mergeNeighbours, drawFrame, planTimestamps, canvasToBlob } from './extract.js?v=4';
+import { analyze, filterFrames, classify } from './analyze.js?v=4';
+import { upscaleImage, enhanceImage, resizeImage, initBackend, fallbackBackend, currentBackend, gpuName, isMobile, tileCount } from './upscale.js?v=4';
 
 const $ = id => document.getElementById(id);
 const MAX_OUTPUT_SIDE = 8192;      // browser canvas + memory safety
@@ -17,7 +17,10 @@ drop.addEventListener('click', () => fileInput.click());
 drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInput.click(); } });
 ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('over'); }));
-drop.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) openFile(f); });
+drop.addEventListener('drop', e => { e.stopPropagation(); const f = e.dataTransfer.files[0]; if (f) openFile(f); });
+// A file dropped anywhere else must not make the browser open it (that would wipe the app).
+window.addEventListener('dragover', e => e.preventDefault());
+window.addEventListener('drop', e => { e.preventDefault(); const f = e.dataTransfer?.files[0]; if (f && !state.running) openFile(f); });
 fileInput.addEventListener('change', () => { if (fileInput.files[0]) openFile(fileInput.files[0]); fileInput.value = ''; });
 const pickVideo = () => { if (!state.running) fileInput.click(); };
 $('changeVideo').addEventListener('click', pickVideo);
@@ -41,7 +44,19 @@ async function openFile(file) {
     $('fileChip').classList.add('has');
     updateHints();
     goStep(2);
-  } catch (e) { showError(e.message); }
+  } catch (e) { showError((await looksLikeVideo(file)) ? e.message : `“${file.name}” doesn’t look like a video file, or it is damaged. Choose an MP4, MOV or WebM video.`); }
+}
+
+// Container signatures: MP4/MOV (ftyp, moov, mdat, wide, free, skip), WebM/MKV (EBML), AVI (RIFF), MPEG-TS/PS, FLV, Ogg.
+async function looksLikeVideo(file) {
+  try {
+    const b = new Uint8Array(await file.slice(0, 12).arrayBuffer());
+    const str = (o, n) => String.fromCharCode(...b.slice(o, o + n));
+    return ['ftyp', 'moov', 'mdat', 'wide', 'free', 'skip'].includes(str(4, 4))
+      || (b[0] === 0x1a && b[1] === 0x45 && b[2] === 0xdf && b[3] === 0xa3)
+      || str(0, 4) === 'RIFF' || str(0, 3) === 'FLV' || str(0, 4) === 'OggS'
+      || b[0] === 0x47 || (b[0] === 0 && b[1] === 0 && b[2] === 1 && b[3] === 0xba);
+  } catch { return true; }
 }
 
 // ---------- wizard navigation ----------
@@ -98,9 +113,20 @@ $('backBtn').addEventListener('click', () => {
 });
 
 // mobile menu
-function closeMenu() { $('sidebar').classList.remove('open'); $('scrim').hidden = true; }
-$('menuBtn').addEventListener('click', () => { $('sidebar').classList.add('open'); $('scrim').hidden = false; });
-$('scrim').addEventListener('click', closeMenu);
+function menuOpen() { return $('sidebar').classList.contains('open'); }
+function closeMenu({ restoreFocus = false } = {}) {
+  const was = menuOpen();
+  $('sidebar').classList.remove('open'); $('scrim').hidden = true;
+  $('menuBtn').setAttribute('aria-expanded', 'false');
+  if (was && restoreFocus) $('menuBtn').focus();
+}
+$('menuBtn').addEventListener('click', () => {
+  $('sidebar').classList.add('open'); $('scrim').hidden = false;
+  $('menuBtn').setAttribute('aria-expanded', 'true');
+  $('sidebar').querySelector('.side-item:not(:disabled)')?.focus();
+});
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && menuOpen()) closeMenu({ restoreFocus: true }); });
+$('scrim').addEventListener('click', () => closeMenu({ restoreFocus: true }));
 
 // theme toggle (remembered per browser; works without storage too)
 function applyTheme(t) {
@@ -109,6 +135,7 @@ function applyTheme(t) {
   $('themeBtn').querySelector('use').setAttribute('href', dark ? '#i-sun' : '#i-moon');
 }
 try { applyTheme(localStorage.getItem('fl-theme')); } catch { applyTheme(null); }
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!document.documentElement.dataset.theme) applyTheme(null); });
 $('themeBtn').addEventListener('click', () => {
   const cur = document.documentElement.dataset.theme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const next = cur === 'dark' ? 'light' : 'dark';
@@ -123,13 +150,15 @@ if (qs.get('video')) {
   try {
     const u = new URL(qs.get('video'), location.href);
     if (u.origin === location.origin) {
-      fetch(u).then(r => r.blob()).then(b => openFile(new File([b], u.pathname.split('/').pop() || 'video', { type: b.type })));
+      fetch(u).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+        .then(b => openFile(new File([b], u.pathname.split('/').pop() || 'video', { type: b.type })))
+        .catch(e => showError(`Could not load the linked video (${e.message}).`));
     }
   } catch { /* not a URL */ }
 }
 
 // ---------- settings ----------
-const settingIds = ['every', 'count', 'fps', 'start', 'end', 'maxFrames', 'quality', 'skipBlurry', 'dedupe', 'bestFrame', 'autoEnhance', 'sharpen', 'texture'];
+const settingIds = ['every', 'count', 'fps', 'start', 'end', 'maxFrames', 'quality', 'skipBlurry', 'dedupe', 'bestFrame', 'cleanup', 'autoEnhance', 'sharpen', 'texture'];
 settingIds.forEach(id => $(id).addEventListener('input', updateHints));
 document.querySelectorAll('input[name=mode], input[name=scale], input[name=model], input[name=format]')
   .forEach(r => r.addEventListener('change', updateHints));
@@ -147,7 +176,7 @@ function readSettings() {
     start, end, maxFrames: clamp(Math.round(+$('maxFrames').value || 60), 1, 1000),
     scale: +radio('scale'), model: radio('model'),
     format: radio('format'), quality: +$('quality').value / 100,
-    skipBlurry: $('skipBlurry').checked, dedupe: $('dedupe').value, bestFrame: $('bestFrame').checked,
+    skipBlurry: $('skipBlurry').checked, dedupe: $('dedupe').value, bestFrame: $('bestFrame').checked, cleanup: $('cleanup').checked,
     enhance: $('autoEnhance').checked, sharpen: +$('sharpen').value / 100, texture: +$('texture').value / 100,
   };
 }
@@ -157,6 +186,22 @@ function readSettings() {
 const MAX_OUTPUT_PIXELS = isMobile ? 16777216 : Infinity;
 function tooBig(v, k) {
   return Math.max(v.videoWidth, v.videoHeight) * k > MAX_OUTPUT_SIDE || v.videoWidth * v.videoHeight * k * k > MAX_OUTPUT_PIXELS;
+}
+// Frame-selection inputs that make no sense are flagged instead of being quietly replaced.
+const CHECKED_INPUTS = ['every', 'count', 'fps', 'maxFrames', 'start', 'end'];
+function settingsProblem() {
+  const v = state.video, mode = radio('mode');
+  const num = id => { const t = $(id).value.trim(); return t === '' ? NaN : +t; };
+  const every = num('every'), count = num('count'), fps = num('fps'), max = num('maxFrames');
+  const start = $('start').value.trim() === '' ? 0 : num('start'), end = $('end').value.trim() === '' ? v.duration : num('end');
+  if (mode === 'interval' && !(every >= 0.04)) return { id: 'every', msg: '“Every” must be at least 0.04 seconds.' };
+  if (mode === 'count' && !(Number.isInteger(count) && count >= 1 && count <= 500)) return { id: 'count', msg: '“How many frames” must be a whole number from 1 to 500.' };
+  if (mode === 'all' && !(fps >= 1 && fps <= 120)) return { id: 'fps', msg: 'Frame rate must be between 1 and 120 fps.' };
+  if (!(Number.isInteger(max) && max >= 1 && max <= 1000)) return { id: 'maxFrames', msg: '“Max frames” must be a whole number from 1 to 1000.' };
+  if (!(start >= 0 && start < v.duration)) return { id: 'start', msg: `“From” must be between 0 and ${v.duration.toFixed(2)} seconds.` };
+  if (!(end <= v.duration + 0.01)) return { id: 'end', msg: `“To” can’t be after the end of the video (${v.duration.toFixed(2)} s).` };
+  if (!(end > start)) return { id: 'end', msg: '“To” must be later than “From”.' };
+  return null;
 }
 function effectiveScale(s) {
   const v = state.video;
@@ -203,7 +248,14 @@ function updateHints() {
   $('qualityWrap').hidden = s.format === 'png';
   $('qualityVal').textContent = Math.round(s.quality * 100);
   const plan = planTimestamps(s);
-  $('planHint').textContent = `${plan.timestamps.length} frame${plan.timestamps.length === 1 ? '' : 's'} will be extracted` +
+  const bad = settingsProblem();
+  CHECKED_INPUTS.forEach(id => $(id).toggleAttribute('aria-invalid', bad?.id === id));
+  if (bad) $(bad.id).setAttribute('aria-invalid', 'true');
+  $('planHint').classList.toggle('warn', !!bad);
+  if (!bad && $('error').dataset.kind === 'settings') showError(null);
+  document.querySelectorAll('[data-go="3"], #run').forEach(b => { b.disabled = !!bad; });
+  if (bad) $('planHint').textContent = bad.msg + ' Fix it to continue.';
+  else $('planHint').textContent = `${plan.timestamps.length} frame${plan.timestamps.length === 1 ? '' : 's'} will be extracted` +
     (plan.truncated ? ` (capped from ${plan.total}; raise “Max frames” for more)` : '') +
     (s.skipBlurry || s.dedupe !== 'off' ? ', then blurry/duplicate ones are skipped before upscaling.' : '.');
   const v = state.video, eff = effectiveScale(s);
@@ -242,7 +294,8 @@ function updateStats() {
     const total = done.reduce((a, f) => a + f.result.size, 0);
     const run = window.__lastRun;
     const upscaled = done[0] && done[0].outW > done[0].width;
-    setStat(1, 'Ready', String(done.length), `${upscaled ? '<span class="chip">HD</span> ' : ''}of ${state.frames.length} extracted`);
+    const hd = done[0] && isHD(done[0].outH);
+    setStat(1, 'Ready', String(done.length), `${hd ? '<span class="chip">HD</span> ' : ''}of ${state.frames.length} extracted`);
     setStat(2, 'Skipped', String(skipped), skipped ? 'blurry or duplicate' : 'none');
     setStat(3, 'Speed', run?.avgMs >= 50 ? `${(run.avgMs / 1000).toFixed(1)} s` : run ? '< 0.1 s' : state.running ? '…' : 'Not yet', upscaled || state.running ? 'per frame (AI)' : 'per frame');
     setStat(4, 'Total size', total ? fmtBytes(total) : '0 KB', done[0] ? `${done[0].outW}×${done[0].outH} each` : '');
@@ -254,6 +307,7 @@ function updateStats() {
   setStat(3, 'Frames', String(plan.timestamps.length), plan.truncated ? `<span class="chip warn">capped</span> of ${plan.total}` : 'before skipping');
   setStat(4, 'Output', `${v.videoWidth * eff}×${v.videoHeight * eff}`, eff > 1 ? `<span class="chip accent">${eff}× AI</span> ${resLabel(v.videoHeight * eff)}` : 'original size');
 }
+const isHD = h => h >= 720;
 function resLabel(h) { return h >= 4320 ? '8K' : h >= 2160 ? '4K' : h >= 1440 ? '1440p' : h >= 1080 ? 'Full HD' : h >= 720 ? 'HD' : 'SD'; }
 function fmtBytes(b) { return b > 1e9 ? (b / 1e9).toFixed(2) + ' GB' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1e3)) + ' KB'; }
 
@@ -265,6 +319,8 @@ $('cancel').addEventListener('click', () => state.abort?.abort());
 async function run({ single } = {}) {
   if (state.running || !state.video) return;
   showError(null);
+  const bad = single == null && settingsProblem();
+  if (bad) { goStep(2); showError(bad.msg); $('error').dataset.kind = 'settings'; $(bad.id).focus(); return; }
   const s = readSettings();
   const scale = effectiveScale(s);
   const plan = single != null ? { timestamps: [single] } : planTimestamps(s);
@@ -291,6 +347,10 @@ async function run({ single } = {}) {
       let at = t;
       try { at = await seekSharpest(v, t, win); } catch { await seekTo(v, t + 0.01); at = t + 0.01; } // one retry slightly later
       const canvas = drawFrame(v);
+      if (s.cleanup) {
+        setStatus(`Reducing grain on frame ${i + 1} / ${plan.timestamps.length}`, ((i + 0.5) / plan.timestamps.length) * 0.2);
+        await mergeNeighbours(v, at, canvas, { signal: ac.signal });
+      }
       const f = {
         index: indexBase + i, time: at, width: canvas.width, height: canvas.height,
         analysis: analyze(canvas),
@@ -361,7 +421,7 @@ async function run({ single } = {}) {
     }
     const skipped = frames.length - kept.length;
     const avg = kept.length && scale > 1 ? ` (${(upMsTotal / kept.length / 1000).toFixed(1)} s per frame)` : '';
-    setStatus(`Done: ${kept.length} ${scale > 1 ? 'HD ' : ''}image${kept.length === 1 ? '' : 's'}${skipped ? `, ${skipped} skipped (turn on “Show skipped” to see them)` : ''} in ${fmtTime((performance.now() - t0) / 1000)}${avg}.`, 1);
+    setStatus(`Done: ${kept.length} ${kept[0] && isHD(kept[0].outH) ? 'HD ' : ''}image${kept.length === 1 ? '' : 's'}${skipped ? `, ${skipped} skipped (turn on “Show skipped” to see them)` : ''} in ${fmtTime((performance.now() - t0) / 1000)}${avg}.`, 1);
     window.__lastRun = { kept: kept.length, skipped, avgMs: kept.length ? upMsTotal / kept.length : 0, firstMs };
   } catch (e) {
     if (e.name === 'AbortError') setStatus('Cancelled. Finished frames are still available below.', null);
@@ -450,7 +510,8 @@ function updateEmpty() {
 function updateResultsTitle() {
   const done = state.frames.filter(f => f.status === 'done').length;
   const skipped = state.frames.filter(f => f.status === 'skipped').length;
-  $('resultsTitle').textContent = `HD images: ${done} ready${skipped ? `, ${skipped} skipped` : ''}`;
+  const first = state.frames.find(f => f.status === 'done');
+  $('resultsTitle').textContent = `${first && !isHD(first.outH) ? 'Images' : 'HD images'}: ${done} ready${skipped ? `, ${skipped} skipped` : ''}`;
   updateEmpty();
 }
 
@@ -508,6 +569,9 @@ $('zipBtn').addEventListener('click', async () => {
       const blob = await zip.generateAsync({ type: 'blob', streamFiles: true });
       saveBlob(blob, `${baseName}-hd-frames${parts.length > 1 ? `-part${p + 1}` : ''}.zip`);
     }
+  } catch (e) {
+    console.error(e);
+    showError('Could not build the ZIP' + (/memory|allocat|size/i.test(String(e?.message)) ? ': the browser ran out of memory. Save images one by one, or use JPG to make them smaller.' : ` (${e?.message || e}). Try again, or save images one by one.`));
   } finally { btn.innerHTML = label; btn.disabled = false; }
 });
 
@@ -537,7 +601,7 @@ function setStatus(text, p) {
   $('status').textContent = text;
   if (p != null) { $('bar').style.transform = `scaleX(${clamp(p, 0, 1)})`; $('progress').setAttribute('aria-valuenow', Math.round(clamp(p, 0, 1) * 100)); }
 }
-function showError(msg) { const e = $('error'); e.hidden = !msg; e.textContent = msg || ''; }
+function showError(msg) { const e = $('error'); delete e.dataset.kind; e.hidden = !msg; e.textContent = msg || ''; }
 function abortErr() { return new DOMException('Cancelled', 'AbortError'); }
 function clamp(x, a, b) { return Math.min(b, Math.max(a, x)); }
 function fmtTime(sec, precise) {
@@ -567,6 +631,7 @@ function shortGpu(g) {
   const m = g.match(/ANGLE \([^,]+,\s*([^(,]+?)(?:\s*\(0x|\s*Direct3D|,|\))/);
   return (m ? m[1] : g).replace(/\((R|TM)\)/g, '').replace(/\s+/g, ' ').trim();
 }
+$('appVersion').textContent = 'Version ' + (new URL(import.meta.url).searchParams.get('v') || 'dev');
 showGpuInfo();
 goStep(1);
 

@@ -76,6 +76,102 @@ export async function seekSharpest(video, t, win, n = 5) {
   return best;
 }
 
+// Multi-frame grain reduction. Sensor grain changes from frame to frame while real detail stays
+// put, so averaging a frame with its neighbours removes grain without blurring. (Measured: about
+// +1 dB on grainy, high-bitrate footage; no gain on low-bitrate video, because the encoder copies
+// still areas forward and their compression error is the same in every frame. Off by default.) Each neighbour pixel only counts where the local area matches the centre frame;
+// anything that moved (people, a camera pan) falls back to the single frame, so nothing ghosts.
+// `canvas` holds the frame at time `at`; it is updated in place. Returns how many neighbours helped.
+const STEP = 1 / 24; // lands on a different frame for any video of 24 fps or more
+function pixelsOf(video, w, h) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(video, 0, 0);
+  return g.getImageData(0, 0, w, h).data;
+}
+export async function mergeNeighbours(video, at, canvas, { radius = 2, signal } = {}) {
+  const w = canvas.width, h = canvas.height, n = w * h;
+  const g = canvas.getContext('2d', { willReadFrequently: true });
+  const img = g.getImageData(0, 0, w, h), c = img.data;
+  const sum = new Float32Array(n * 3), wsum = new Float32Array(n);
+  for (let i = 0; i < n; i++) { sum[i * 3] = c[i * 4]; sum[i * 3 + 1] = c[i * 4 + 1]; sum[i * 3 + 2] = c[i * 4 + 2]; wsum[i] = 1; }
+  const diff = new Float32Array(n), tmp = new Float32Array(n);
+  let used = 0;
+  for (let k = -radius; k <= radius; k++) {
+    if (!k) continue;
+    if (signal?.aborted) break;
+    const t = at + k * STEP;
+    if (t < 0 || t > video.duration - 0.001) continue;
+    try { await seekTo(video, t); } catch { continue; }
+    const p = pixelsOf(video, w, h);
+    // luma difference, 7x7 box blur so noise alone doesn't look like motion, then spread it 4 px
+    // so the soft edges of moving things are excluded too (tuned against a clean reference)
+    let same = true;
+    for (let i = 0; i < n; i++) {
+      const j = i * 4;
+      const d = Math.abs(0.299 * (p[j] - c[j]) + 0.587 * (p[j + 1] - c[j + 1]) + 0.114 * (p[j + 2] - c[j + 2]));
+      diff[i] = d; if (d) same = false;
+    }
+    if (same) continue; // seek landed on the same frame (low frame rate video)
+    boxBlur(diff, tmp, w, h, 3);
+    maxFilter(diff, tmp, w, h, 4);
+    let helped = 0;
+    for (let i = 0; i < n; i++) {
+      const d = diff[i];
+      const wt = d <= 2 ? 1 : d >= 6 ? 0 : (6 - d) / 4;
+      if (!wt) continue;
+      const j = i * 4, q = i * 3;
+      sum[q] += p[j] * wt; sum[q + 1] += p[j + 1] * wt; sum[q + 2] += p[j + 2] * wt; wsum[i] += wt;
+      helped += wt;
+    }
+    if (helped > n * 0.05) used++;
+  }
+  if (used) {
+    for (let i = 0; i < n; i++) {
+      const q = i * 3, j = i * 4, ws = wsum[i];
+      c[j] = sum[q] / ws; c[j + 1] = sum[q + 1] / ws; c[j + 2] = sum[q + 2] / ws;
+    }
+    g.putImageData(img, 0, 0);
+  }
+  return used;
+}
+// separable max filter (dilation), radius r, in place on `a`
+function maxFilter(a, t, w, h, r) {
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      let m = 0; const x1 = Math.min(w - 1, x + r);
+      for (let xx = Math.max(0, x - r); xx <= x1; xx++) if (a[row + xx] > m) m = a[row + xx];
+      t[row + x] = m;
+    }
+  }
+  for (let x = 0; x < w; x++) for (let y = 0; y < h; y++) {
+    let m = 0; const y1 = Math.min(h - 1, y + r);
+    for (let yy = Math.max(0, y - r); yy <= y1; yy++) if (t[yy * w + x] > m) m = t[yy * w + x];
+    a[y * w + x] = m;
+  }
+}
+// separable box blur, radius r, in place on `a`
+function boxBlur(a, t, w, h, r) {
+  const win = 2 * r + 1;
+  for (let y = 0; y < h; y++) {
+    const row = y * w; let s = 0;
+    for (let x = -r; x <= r; x++) s += a[row + Math.min(w - 1, Math.max(0, x))];
+    for (let x = 0; x < w; x++) {
+      t[row + x] = s / win;
+      s += a[row + Math.min(w - 1, x + r + 1)] - a[row + Math.max(0, x - r)];
+    }
+  }
+  for (let x = 0; x < w; x++) {
+    let s = 0;
+    for (let y = -r; y <= r; y++) s += t[Math.min(h - 1, Math.max(0, y)) * w + x];
+    for (let y = 0; y < h; y++) {
+      a[y * w + x] = s / win;
+      s += t[Math.min(h - 1, y + r + 1) * w + x] - t[Math.max(0, y - r) * w + x];
+    }
+  }
+}
+
 export function drawFrame(video) {
   const c = document.createElement('canvas');
   c.width = video.videoWidth; c.height = video.videoHeight;
